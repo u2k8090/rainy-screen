@@ -160,4 +160,4 @@ Please keep changes focused and run `swift test -c release` before opening a pul
 
 ## License
 
-The project license has not been selected yet. A `LICENSE` file will be added before the first general public release.
+Rainy Screen is released under the [MIT License](LICENSE).
