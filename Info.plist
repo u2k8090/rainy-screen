@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>local.noa.RainGlass</string>
+<key>CFBundleName</key><string>Rainy Screen</string>
+<key>CFBundleDisplayName</key><string>Rainy Screen</string>
+<key>CFBundleExecutable</key><string>RainyScreen</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>RainyScreen.icns</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>1.0.0</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>LSUIElement</key><true/>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSLocationUsageDescription</key><string>現在地の雨に合わせて、ディスプレイに雨粒を表示します。天気取得のため、丸めた座標をOpen-Meteoに送信します。</string>
+<key>NSLocationWhenInUseUsageDescription</key><string>現在地の天気を取得して、雨の日に画面へ雨粒を表示します。</string>
+</dict></plist>

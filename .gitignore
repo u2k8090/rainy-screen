@@ -1,0 +1,8 @@
+.build/
+dist/
+.codebase-memory/
+artifacts/
+docs/*
+!docs/media/
+!docs/media/**
+.DS_Store
