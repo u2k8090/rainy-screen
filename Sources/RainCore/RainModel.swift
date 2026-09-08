@@ -11,7 +11,30 @@ public struct WeatherResponse: Decodable {
             rain + showers > 0 || [51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99].contains(weather_code)
         }
         public var intensity: Float {
-            isRaining ? Float(min(1.5, max(0.25, (rain + showers) * 1.5 + 0.3))) : 0
+            guard isRaining else { return 0 }
+            // Open-Meteo's current rain/showers values are precipitation
+            // amounts for the recent 15-minute model interval. Use the
+            // weather code as a categorical floor, then let the amount move
+            // continuously between the app's visual intensity bands.
+            let codeFloor: Float
+            switch weather_code {
+            case 51,56,61,66,80:
+                codeFloor = 0.8
+            case 53,63,81:
+                codeFloor = 1.4
+            case 55,57:
+                codeFloor = 2.4
+            case 65,67,95:
+                codeFloor = 3.8
+            case 82,96,99:
+                codeFloor = 5.6
+            default:
+                codeFloor = 0.35
+            }
+            let recentAmount = max(0,rain+showers)
+            let amountIntensity = min(5.6, max(0.35,
+                0.35+log(1+recentAmount*4)*1.35))
+            return max(codeFloor,Float(amountIntensity))
         }
         public func isFresh(at date: Date) -> Bool {
             let age = date.timeIntervalSince1970 - time
@@ -27,6 +50,59 @@ public func segmentDistance(_ p: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Flo
     let t = l > 0 ? min(1, max(0, (v.x*d.x + v.y*d.y)/l)) : 0
     let q = p - (a + t*d)
     return sqrt(q.x*q.x + q.y*q.y)
+}
+
+/// Visual flow constants calibrated against the Strong rain setting
+/// (intensity 2.4). Keep these together while tuning the look; the intensity
+/// value should only scale the existing storm/deluge behavior around them.
+private enum FlowTuning {
+    static let baseGravity: Float = 460
+    static let strongReferenceIntensity: Float = 2.4
+    static let lowerRainFlowExponent: Float = 1.7
+    static let mistFastDropRadius: Float = 3.8
+    static let heavyStrongWeight: Float = 0.60
+    static let heavyDelugeWeight: Float = 0.40
+    /// Keep the number of flowing beads close to Heavy while making each
+    /// flowing bead faster and optically stronger.
+    static let delugeFlowProbability: Float = 0.13
+    /// 豪雨の全流動粒を現在の豪雨設定からさらに2倍へ引き上げる。
+    static let delugeSpeedMultiplier: Float = 3.0
+    /// 大粒・高速粒は、現在の高速豪雨設定からさらに2倍へ引き上げる。
+    static let delugeFastDropSpeedMultiplier: Float = 4.0
+    static let delugeFastDropRadius: Float = 4.5
+    static let delugeFastDropSpeedThreshold: Float = 80
+    static let delugeStallProbabilityScale: Float = 0.28
+    static let delugeGripScale: Float = 0.40
+    static let delugeTrailWidthScale: Float = 1.35
+    static let delugeTrailDepositScale: Float = 1.20
+    static let delugeTrailLifetimeScale: Float = 1.60
+    static let delugeTrailCaptureMaxDropRadius: Float = 4.2
+    static let delugeTrailCaptureMaxSpeed: Float = 80
+    static let delugeTrailCaptureRadiusScale: Float = 1.20
+    static let delugeTrailCaptureAreaScale: Float = 0.035
+    static let delugeTrailMaxRadius: Float = 8.5
+    static let kineticResistanceRatio: Float = 0.56
+    static let radiusResistanceRatio: Float = 0.015
+    static let stormGripBase: Float = 0.08
+    static let stormGripVariation: Float = 0.12
+    static let gripWavePrimary: Float = 0.48
+    static let gripWaveSecondary: Float = 0.24
+    static let gripWaveTertiary: Float = 0.08
+    static let breakawayPulseRatio: Float = 0.35
+    static let movingSpeedThreshold: Float = 8
+    static let restingSpeedThreshold: Float = 2
+    static let breakawaySpeed: Float = 6
+    static let breakawaySpeedPerRadius: Float = 1.5
+    static let stallRate: Float = 0.10
+    static let stallRateVariation: Float = 0.32
+    static let stormStallRate: Float = 0.12
+    static let stallDurationBase: Float = 0.32
+    static let stallDurationVariation: Float = 0.65
+    static let stallDurationByTendency: Float = 1.25
+    static let stallCooldownBase: Float = 0.70
+    static let stallCooldownVariation: Float = 1.40
+    static let stallCooldownByTendency: Float = 2.0
+    static let viscousDragByTendency: Float = 8
 }
 
 /// Volume is measured in radius-cubed units; the common spherical-cap factor cancels.
@@ -49,6 +125,9 @@ public struct Drop {
     public var wobble: Float
     /// Probability bias for contact-line pinning and temporary stops.
     public var stallTendency: Float
+    /// Hysteresis state for static/dynamic contact resistance.
+    /// A drop needs more force to start moving than it needs to keep moving.
+    public var isMoving: Bool = false
     public var deformation: Float = 0
     public var age: Float = 0
     public var stallTimer: Float = 0
@@ -196,10 +275,25 @@ public struct RainModel {
         let baseIntensity = min(max(0,intensity),3.8)
         let baseStorm = min(1,max(0,(baseIntensity-1.5)/4.1))
         let isDeluge = intensity > 3.8
+        let isHeavyBlend = abs(intensity-3.8) < 0.01
+        let delugeBlend: Float = isDeluge
+            ? min(1,max(0,(intensity-3.8)/1.8))
+            : (isHeavyBlend ? FlowTuning.heavyDelugeWeight : 0)
         let isMist = intensity > 0.001 && (mist || intensity <= 0.5)
-        let speedMultiplier: Float = isDeluge ? 1.35 : (isMist ? 0.18 : 1)
         let dropLimit = isMist ? 3200 : Int(1800 + baseStorm*1800)
         let spawnRate = isMist ? 11.5 : min(8.4,baseIntensity)
+        // Strong is the speed reference. Below Strong, suppress only the
+        // fraction of newly born beads that are already flowing; the water
+        // that grows into a large bead keeps the Strong runoff speed.
+        let lowerRainScale = min(1,max(0,baseIntensity/FlowTuning.strongReferenceIntensity))
+        let lowerRainFlowScale = pow(lowerRainScale,FlowTuning.lowerRainFlowExponent)
+        let strongFlowProbability = 0.035
+            + min(1,max(0,(FlowTuning.strongReferenceIntensity-1.5)/4.1))*0.12
+        let regularFlowProbability = (0.035+baseStorm*0.12)*lowerRainFlowScale
+        let flowProbability = isHeavyBlend
+            ? strongFlowProbability*FlowTuning.heavyStrongWeight
+                + FlowTuning.delugeFlowProbability*FlowTuning.heavyDelugeWeight
+            : (isDeluge ? FlowTuning.delugeFlowProbability : regularFlowProbability)
         if !sweepActive {
             updateRivulets(dt:dt,size:size,intensity:intensity)
         }
@@ -218,7 +312,7 @@ public struct RainModel {
                 running = existingMistRunners+spawnedMistRunners < 2 && random() < 0.00012
                 if running { spawnedMistRunners += 1 }
             } else {
-                running = random() < 0.035+baseStorm*0.12
+                running = random() < flowProbability
             }
             let radiusBias: Float = isDeluge ? 0.68 : 1
             let smallRadius = isMist
@@ -254,6 +348,7 @@ public struct RainModel {
                               speedFactor:0.58+pow(random(),0.72)*0.96,drift:drift,wobble:wobble,
                               stallTendency:0.2+random()*0.8))
         }
+        if delugeBlend > 0 { absorbDelugeDropsIntoTrails(blend:delugeBlend) }
         for i in drops.indices {
             var d = drops[i]
             d.previous = d.position; d.age += dt
@@ -265,9 +360,16 @@ public struct RainModel {
                 stalled = true
                 if d.stallTimer == 0 { d.speed = max(8,d.speed) }
             } else if d.stallCooldown == 0 && d.stallTendency > 0 && d.speed > 24,
-                      random() < dt*(0.045+0.14*d.stallTendency) {
-                d.stallTimer = 0.28+random()*(0.5+1.0*d.stallTendency)
-                d.stallCooldown = 0.9+random()*2.4
+                      random() < dt*(FlowTuning.stallRate
+                                     + FlowTuning.stallRateVariation*d.stallTendency
+                                     + baseStorm*FlowTuning.stormStallRate)
+                                     * (isDeluge ? FlowTuning.delugeStallProbabilityScale : 1) {
+                d.stallTimer = FlowTuning.stallDurationBase
+                    + random()*(FlowTuning.stallDurationVariation
+                                + FlowTuning.stallDurationByTendency*d.stallTendency)
+                d.stallCooldown = FlowTuning.stallCooldownBase
+                    + random()*(FlowTuning.stallCooldownVariation
+                                + FlowTuning.stallCooldownByTendency*d.stallTendency)
                 d.speed *= 0.12
                 stalled = true
                 stallCount += 1
@@ -276,28 +378,82 @@ public struct RainModel {
             // ambient rain or changing the contact-boundary accumulation.
             let motionDT = dt * (d.collected && d.releasedFromSweep ? 1.8 : 1)
             let r = d.radius
-            // Gravity scales with volume; contact-line retention scales with radius.
-            // A spatial adhesion field plus different static/kinetic thresholds produces stick-slip.
-            let patch = 1 + 0.38*sin(d.position.y*0.055+d.phase)
-                + 0.18*sin(d.position.y*0.19+d.phase*2)
-                + 0.06*sin(d.position.x*0.017+d.phase*0.73)
-            let glassRetention = 460 * pow(3.35/r,2) * d.adhesion * patch
-            let retention = d.heldBySweep ? max(glassRetention,460*pow(8.5/r,2)) : glassRetention
-            let resistance = d.speed > 3 ? retention*0.55 : retention
-            if !stalled && (d.speed > 0 || resistance < 460) {
-                let sizeFactor = 0.72 + min(1.0,max(0,r-1)/6.0)*0.88
-                let cadence = 0.48 + min(1.6,d.speedFactor)*0.33 + min(r,8)*0.035
-                let speedPulse = sin(d.age*cadence+d.phase*1.37)*(28+min(r,8)*5)
-                    + sin(d.age*(cadence*0.43+0.17)-d.phase*0.61)*14
-                let acceleration = ((460 - resistance - d.speed*10/max(r,1)
+            // Mist keeps its barely-moving pin droplets, but a bead that has
+            // grown past the runner size uses the same speed as Strong rain.
+            let speedMultiplier: Float
+            if isMist && r < FlowTuning.mistFastDropRadius {
+                speedMultiplier = 0.18
+            } else if delugeBlend > 0 && (r >= FlowTuning.delugeFastDropRadius
+                                   || d.speed > FlowTuning.delugeFastDropSpeedThreshold) {
+                speedMultiplier = 1+delugeBlend*(FlowTuning.delugeFastDropSpeedMultiplier-1)
+            } else {
+                speedMultiplier = 1+delugeBlend*(FlowTuning.delugeSpeedMultiplier-1)
+            }
+            // Gravity scales with the bead's effective cross-section and its
+            // persistent speed variation. This is deliberately stylized: the
+            // goal is to preserve the visual relationship between volume and
+            // runoff without simulating a full fluid solver.
+            let sizeFactor = 0.72 + min(1.0,max(0,r-1)/6.0)*0.88
+            let gravityForce = FlowTuning.baseGravity * sizeFactor * d.speedFactor
+
+            // A spatial adhesion field plus different static/kinetic thresholds
+            // produces stick-slip. Static resistance is only used to decide
+            // whether a bead breaks free; once it moves, the lower kinetic
+            // resistance lets it continue as a narrow, fast stream.
+            let patch = 1 + FlowTuning.gripWavePrimary*sin(d.position.y*0.055+d.phase)
+                + FlowTuning.gripWaveSecondary*sin(d.position.y*0.19+d.phase*2)
+                + FlowTuning.gripWaveTertiary*sin(d.position.x*0.017+d.phase*0.73)
+            let stormGrip = 1 + baseStorm*(FlowTuning.stormGripBase
+                                            + FlowTuning.stormGripVariation*d.stallTendency)
+                                            * (isDeluge ? FlowTuning.delugeGripScale : 1)
+            let glassRetention = FlowTuning.baseGravity * pow(3.35/r,2)
+                * d.adhesion * patch * stormGrip
+            let staticResistance = d.heldBySweep
+                ? max(glassRetention,FlowTuning.baseGravity*pow(8.5/r,2))
+                : glassRetention
+            let kineticRatio = FlowTuning.kineticResistanceRatio
+                + min(0.16,r*FlowTuning.radiusResistanceRatio)
+            let kineticResistance = staticResistance * kineticRatio
+            let cadence = 0.48 + min(1.6,d.speedFactor)*0.33 + min(r,8)*0.035
+            let speedPulse = sin(d.age*cadence+d.phase*1.37)*(28+min(r,8)*5)
+                + sin(d.age*(cadence*0.43+0.17)-d.phase*0.61)*14
+
+            if d.speed > FlowTuning.movingSpeedThreshold { d.isMoving = true }
+            if !d.isMoving && !stalled {
+                // A small positive margin creates a visible breakaway rather
+                // than leaving the bead hovering at an almost-zero speed.
+                let breakawayForce = gravityForce + speedPulse*FlowTuning.breakawayPulseRatio
+                if breakawayForce > staticResistance {
+                    d.isMoving = true
+                    d.speed = max(d.speed,FlowTuning.breakawaySpeed
+                                      + min(16,r*FlowTuning.breakawaySpeedPerRadius))
+                } else {
+                    d.speed = 0
+                }
+            }
+
+            if !stalled && d.isMoving {
+                let viscousDrag = d.speed*(10+FlowTuning.viscousDragByTendency*d.stallTendency)
+                    / max(r,1)
+                let acceleration = ((gravityForce - kineticResistance - viscousDrag
                                     - d.speed*d.speed/(max(r,1)*90)) + speedPulse)
-                    * speedMultiplier * sizeFactor * d.speedFactor
+                    * speedMultiplier
                 let sizeLimit = (320 + min(330,r*52))*d.speedFactor
                 d.speed = min(sizeLimit*speedMultiplier,max(0,d.speed+acceleration*motionDT))
                 d.position.y += d.speed*motionDT
                 let gust = sin(d.age*(0.72+min(r,8)*0.045)+d.phase*1.73)
                 let spatialWobble = d.wobble > 0.035 ? sin(d.position.y*0.055+d.phase)*d.wobble*0.75 : 0
                 if !d.heldBySweep { d.position.x += (d.drift+gust*d.wobble+spatialWobble)*d.speed*motionDT }
+
+                // Hysteresis: a moving bead can slow into a sticky patch, but
+                // it must lose nearly all momentum before static resistance
+                // takes over again. This is what creates intermittent pauses.
+                if d.speed < FlowTuning.restingSpeedThreshold
+                    && gravityForce+speedPulse*FlowTuning.breakawayPulseRatio
+                        < staticResistance*0.97 {
+                    d.speed = 0
+                    d.isMoving = false
+                }
             }
             if d.heldBySweep && d.speed > 65 && r > 8.5 {
                 d.heldBySweep = false
@@ -313,8 +469,10 @@ public struct RainModel {
                 // The rivulet keeps the moving drop's radius instead of using
                 // one global stroke width. A lower floor keeps tiny beads
                 // visible while the larger beads leave clearly wider tracks.
-                let width = max(0.36,r*0.34)
-                let deposited = min(max(0,d.volume-0.001),length*width*0.035)
+                let trailScale = 1+delugeBlend*(FlowTuning.delugeTrailWidthScale-1)
+                let width = max(0.36,r*0.34)*trailScale
+                let depositScale = 1+delugeBlend*(FlowTuning.delugeTrailDepositScale-1)
+                let deposited = min(max(0,d.volume-0.001),length*width*0.035*depositScale)
                 trails.append(Trail(position:d.previous,end:d.position,radius:width,life:1,volume:deposited))
                 d.volume -= deposited
             }
@@ -323,14 +481,95 @@ public struct RainModel {
         if stepCount % quality.coalescenceInterval == 0 { coalesce() }
         drops.removeAll { $0.position.y > size.y + 40 || $0.position.x < -40 || $0.position.x > size.x+40 || $0.age > 180 }
         for i in trails.indices {
+            let directTrailLifetime = (5.5+baseStorm*4)
+                * (1+delugeBlend*(FlowTuning.delugeTrailLifetimeScale-1))
             let lifetime: Float = trails[i].isThroughFlow
                 ? 24
-                : (trails[i].isRivulet ? 9 : 5.5+baseStorm*4)
+                : (trails[i].isRivulet ? 9 : directTrailLifetime)
             trails[i].life -= dt/lifetime
         }
         trails.removeAll { $0.life <= 0 }
         let trailLimit = min(16000,Int(Float(10000+baseStorm*6000)*quality.trailHistoryScale))
         if trails.count > trailLimit { trails.removeFirst(trails.count-trailLimit) }
+    }
+
+    /// In a downpour, small beads entering an existing direct-drop trail are
+    /// absorbed into that trail instead of remaining as separate beads. This
+    /// is limited to the downstream side of a segment so a drop does not
+    /// absorb its own freshly deposited trail on the next frame.
+    private mutating func absorbDelugeDropsIntoTrails(blend: Float) {
+        guard !drops.isEmpty, !trails.isEmpty else { return }
+        let cell: Float = 32
+        var buckets: [SIMD2<Int32>:[Int]] = [:]
+        for (index,trail) in trails.enumerated()
+            where !trail.isRivulet && !trail.isThroughFlow {
+            let lo = SIMD2<Int32>(
+                Int32(floor(min(trail.position.x,trail.end.x)/cell)),
+                Int32(floor(min(trail.position.y,trail.end.y)/cell)))
+            let hi = SIMD2<Int32>(
+                Int32(floor(max(trail.position.x,trail.end.x)/cell)),
+                Int32(floor(max(trail.position.y,trail.end.y)/cell)))
+            for x in lo.x...hi.x {
+                for y in lo.y...hi.y {
+                    buckets[SIMD2<Int32>(x,y),default:[]].append(index)
+                }
+            }
+        }
+        guard !buckets.isEmpty else { return }
+
+        var remaining: [Drop] = []
+        remaining.reserveCapacity(drops.count)
+        for drop in drops {
+            guard !drop.collected, !drop.heldBySweep,
+                  drop.radius <= FlowTuning.delugeTrailCaptureMaxDropRadius,
+                  drop.speed <= FlowTuning.delugeTrailCaptureMaxSpeed else {
+                remaining.append(drop)
+                continue
+            }
+            guard blend >= 1 || random() < blend else {
+                remaining.append(drop)
+                continue
+            }
+            let reach = max(1.5,drop.radius*0.35)
+            let lo = SIMD2<Int32>(
+                Int32(floor((drop.position.x-reach)/cell)),
+                Int32(floor((drop.position.y-reach)/cell)))
+            let hi = SIMD2<Int32>(
+                Int32(floor((drop.position.x+reach)/cell)),
+                Int32(floor((drop.position.y+reach)/cell)))
+            var candidates = Set<Int>()
+            for x in lo.x...hi.x {
+                for y in lo.y...hi.y {
+                    candidates.formUnion(buckets[SIMD2<Int32>(x,y)] ?? [])
+                }
+            }
+
+            var bestIndex: Int?
+            var bestDistance = Float.greatestFiniteMagnitude
+            for index in candidates {
+                let trail = trails[index]
+                let gap = max(0.5,drop.radius*0.25)
+                guard trail.end.y > drop.position.y + gap else { continue }
+                let captureRadius = trail.radius*FlowTuning.delugeTrailCaptureRadiusScale
+                    + drop.radius*0.35
+                let distance = segmentDistance(drop.position,trail.position,trail.end)
+                guard distance < captureRadius, distance < bestDistance else { continue }
+                bestIndex = index
+                bestDistance = distance
+            }
+            guard let index = bestIndex else {
+                remaining.append(drop)
+                continue
+            }
+
+            let trail = trails[index]
+            let addedArea = drop.volume*FlowTuning.delugeTrailCaptureAreaScale
+            trails[index].radius = min(FlowTuning.delugeTrailMaxRadius,
+                                       sqrt(trail.radius*trail.radius+addedArea))
+            trails[index].volume += drop.volume
+            trails[index].life = max(trails[index].life,1)
+        }
+        drops = remaining
     }
 
     private mutating func updateRivulets(dt: Float, size: SIMD2<Float>, intensity: Float) {
@@ -444,6 +683,7 @@ public struct RainModel {
                     drops[i].speedFactor = (drops[i].speedFactor*va+b.speedFactor*vb)/total
                     drops[i].drift = (drops[i].drift*va+b.drift*vb)/total
                     drops[i].wobble = (drops[i].wobble*va+b.wobble*vb)/total
+                    drops[i].isMoving = drops[i].isMoving || b.isMoving
                     drops[i].volume = total
                     drops[i].collected = drops[i].collected || b.collected
                     drops[i].heldBySweep = drops[i].heldBySweep || b.heldBySweep

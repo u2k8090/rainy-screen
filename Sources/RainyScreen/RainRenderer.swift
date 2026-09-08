@@ -237,15 +237,17 @@ final class RainRenderer: NSObject, MTKViewDelegate {
             initialWetness = 0
             initialFilm = 0
         }
+        let delugeBlend: Float = intensity >= 3.8
+            ? (abs(intensity-3.8) < 0.01 ? 0.4 : min(1,max(0,(intensity-3.8)/1.8)))
+            : 0
         func gpuTrail(_ trail: Trail) -> GPUDrop {
             let delta = trail.end-trail.position
             let length = sqrt(delta.x*delta.x+delta.y*delta.y)
-            let storm = min(1,max(0,(intensity-3.8)/1.8))
             let trailStrength = trail.isThroughFlow
                 ? trail.radius*0.18*trail.life*trail.life
                 : (trail.isRivulet
                     ? trail.radius*0.15*trail.life*trail.life
-                    : trail.radius*0.12*trail.life*trail.life*(1-storm*0.82))
+                    : trail.radius*0.12*trail.life*trail.life*(1+delugeBlend*1.20))
             return GPUDrop(position:(trail.position+trail.end)*0.5*dropScale,
                            radius:SIMD2(trail.radius,length*0.5+trail.radius)*dropScale,
                            strength:trailStrength*dropScale,tilt:-atan2(delta.x,delta.y),
@@ -298,9 +300,8 @@ final class RainRenderer: NSObject, MTKViewDelegate {
         }
         instances += model.drops.map { drop in
             let stretch = min(0.7,drop.speed*0.0015)+(drop.heldBySweep ? 0.15 : drop.deformation)
-            let storm = min(1,max(0,(intensity-3.8)/1.8))
             let verticalScale = drop.collected ? sqrt(1+stretch) : 1+stretch
-            let depthScale = drop.collected ? Float(1.25) : (1-storm*0.65)/sqrt(1+stretch)
+            let depthScale = drop.collected ? Float(1.25) : (1-delugeBlend*0.78)/sqrt(1+stretch)
             let footprintScale: Float = drop.collected ? 1.6 : 1
             return GPUDrop(position:drop.position*dropScale,
                            radius:SIMD2(drop.footprintRadius/sqrt(1+stretch),drop.footprintRadius*verticalScale)*dropScale*footprintScale,

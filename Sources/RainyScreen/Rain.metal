@@ -152,6 +152,10 @@ fragment float4 glassFragment(Vertex in [[stage_in]],texture2d<float> height [[t
     float wet = wetness.sample(s,uv).r;
     float h = height.sample(s,uv).r;
     float trailFlow = height.sample(s,uv).g;
+    float deluge = u.intensity >= 3.8
+        ? (abs(u.intensity-3.8) < 0.01 ? 0.4 : smoothstep(3.8,5.6,u.intensity))
+        : 0.0;
+    float trailThickness = clamp(trailFlow,0.0,1.0)*deluge;
     float2 texel = 1.0/float2(height.get_width(),height.get_height());
     float2 stepPoints = texel*u.size;
     float2 gradient = float2(height.sample(s,uv+float2(texel.x,0)).r-height.sample(s,uv-float2(texel.x,0)).r,
@@ -160,8 +164,11 @@ fragment float4 glassFragment(Vertex in [[stage_in]],texture2d<float> height [[t
                                   height.sample(s,uv+float2(0,texel.y)).g-height.sample(s,uv-float2(0,texel.y)).g)/(2*stepPoints);
     // A moving bead leaves a thin rivulet. Its flow channel contributes to
     // the optical surface even after the bead itself has moved on.
-    gradient += trailGradient*0.72;
-    h += trailFlow*0.58;
+    gradient += trailGradient*(0.72+deluge*0.45);
+    // In a downpour the track is a thicker water lens, not only a brighter
+    // line. Increase its optical depth so refraction and edge separation have
+    // enough surface to read against the desktop.
+    h += trailFlow*(0.58+deluge*0.42);
     // Thousands of sub-pixel condensation beads, analytically shaded without CPU particles.
     float2 microPoint = p/u.dropScale;
     float2 cell = floor(microPoint/9.5), local = fract(microPoint/9.5)*9.5;
@@ -187,7 +194,8 @@ fragment float4 glassFragment(Vertex in [[stage_in]],texture2d<float> height [[t
     float cosTheta = clamp(N.z,0.0,1.0);
     // Snell refraction for air -> water, and Schlick Fresnel (water IOR 1.333).
     float3 transmitted = refract(float3(0,0,-1),N,1.0/1.333);
-    float2 displacement = transmitted.xy/max(0.3,-transmitted.z)*(30+h*4.0);
+    float opticalDepth = h+trailThickness*0.55;
+    float2 displacement = transmitted.xy/max(0.3,-transmitted.z)*(30+opticalDepth*8.0);
     float2 broadWarp = float2(
         fbm(p*0.013+float2(u.time*0.030,-u.time*0.020)),
         fbm(p*0.013+float2(8.3-u.time*0.025,4.7+u.time*0.018))) - 0.5;
@@ -220,9 +228,10 @@ fragment float4 glassFragment(Vertex in [[stage_in]],texture2d<float> height [[t
         fogged = mix(fogged,float3(0.71,0.75,0.76),wet*0.065);
         // Weak chromatic dispersion, confined to the lens edge.
         float3 transmittedColor;
-        transmittedColor.r = desktop.sample(s,refracted+displacement*px*0.008*u.chromaticAberration).r;
+        float chromaticGain = 0.008*u.chromaticAberration*(1.0+trailThickness*2.8);
+        transmittedColor.r = desktop.sample(s,refracted+displacement*px*chromaticGain).r;
         transmittedColor.g = desktop.sample(s,refracted).g;
-        transmittedColor.b = desktop.sample(s,refracted-displacement*px*0.008*u.chromaticAberration).b;
+        transmittedColor.b = desktop.sample(s,refracted-displacement*px*chromaticGain).b;
         transmittedColor *= exp(-float3(0.006,0.0025,0.0015)*h);
         transmittedColor = mix(transmittedColor,fogged,clamp(sheetLayer*0.68,0.0,0.82));
         // Inside a runoff lane, nearby rays arrive from slightly different

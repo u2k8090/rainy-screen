@@ -16,7 +16,18 @@ final class RainCoreTests: XCTestCase {
         XCTAssertTrue(try weather(code:3,rain:0.1).isRaining)
         XCTAssertTrue(try weather(code:3,showers:0.1).isRaining)
         XCTAssertEqual(try weather(code:0).intensity,0)
-        XCTAssertLessThanOrEqual(try weather(code:65,rain:100).intensity,1.5)
+    }
+
+    func testWeatherRainIntensityUsesCodeAndRecentAmount() throws {
+        XCTAssertEqual(try weather(code:61).intensity,0.8)
+        XCTAssertEqual(try weather(code:63).intensity,1.4)
+        XCTAssertEqual(try weather(code:65).intensity,3.8)
+        XCTAssertEqual(try weather(code:82).intensity,5.6)
+
+        let lightAmount = try weather(code:61,rain:0.1).intensity
+        let heavierAmount = try weather(code:61,rain:1).intensity
+        XCTAssertGreaterThan(heavierAmount,lightAmount)
+        XCTAssertLessThanOrEqual(try weather(code:61,rain:100).intensity,5.6)
     }
     func testRejectsStaleAndFutureWeather() throws {
         XCTAssertTrue(try weather(code:61,age:900).isFresh(at:Date()))
@@ -177,6 +188,116 @@ final class RainCoreTests: XCTestCase {
         sizeTest.add(Drop(position:SIMD2(400,0),radius:6,adhesion:0.55,speedFactor:1))
         for _ in 0..<30 { sizeTest.step(dt:1/30,size:SIMD2(800,800),intensity:0) }
         XCTAssertGreaterThan(sizeTest.drops[1].speed,sizeTest.drops[0].speed)
+    }
+
+    func testStaticAndKineticResistanceCreateBreakawayHysteresis() {
+        var resting = RainModel()
+        resting.add(Drop(position:SIMD2(100,0),radius:3.2,phase:0,
+                          adhesion:1,speedFactor:1))
+        resting.step(dt:1/30,size:SIMD2(500,500),intensity:2.4)
+        XCTAssertFalse(resting.drops[0].isMoving)
+        XCTAssertEqual(resting.drops[0].speed,0)
+
+        var moving = RainModel()
+        moving.add(Drop(position:SIMD2(100,0),radius:3.2,speed:9,phase:0,
+                        adhesion:1,speedFactor:1))
+        moving.step(dt:1/30,size:SIMD2(500,500),intensity:2.4)
+        XCTAssertTrue(moving.drops[0].isMoving)
+        XCTAssertGreaterThan(moving.drops[0].speed,9)
+        XCTAssertGreaterThan(moving.drops[0].position.y,0)
+    }
+
+    func testStrongRainCanStopAFlowingDropMoreThanOnce() {
+        var rain = RainModel(seed:42)
+        rain.add(Drop(position:SIMD2(50,0),radius:5,speed:80,phase:0,
+                      adhesion:1,speedFactor:1,stallTendency:1))
+        for _ in 0..<300 {
+            rain.step(dt:1/30,size:SIMD2(100,10000),intensity:2.4)
+        }
+        XCTAssertGreaterThanOrEqual(rain.stallCount,2)
+    }
+
+    func testLightRainHasFewerFlowingDropsThanStrongRain() {
+        var light = RainModel(seed:42), strong = RainModel(seed:42)
+        for _ in 0..<180 {
+            light.step(dt:1/30,size:SIMD2(320,800),intensity:0.8)
+            strong.step(dt:1/30,size:SIMD2(320,800),intensity:2.4)
+        }
+        let lightMoving = light.drops.filter { $0.speed > 0 }.count
+        let strongMoving = strong.drops.filter { $0.speed > 0 }.count
+        XCTAssertGreaterThan(strongMoving,lightMoving)
+    }
+
+    func testLargeDropInLightRainKeepsStrongRunoffSpeed() {
+        var light = RainModel(), strong = RainModel()
+        let drop = Drop(position:SIMD2(100,0),radius:4.5,phase:0,
+                        adhesion:1,speedFactor:1)
+        light.add(drop); strong.add(drop)
+        light.step(dt:1/30,size:SIMD2(500,500),intensity:0.35)
+        strong.step(dt:1/30,size:SIMD2(500,500),intensity:2.4)
+        XCTAssertEqual(light.drops[0].speed,strong.drops[0].speed,accuracy:4)
+    }
+
+    func testDownpourFavorsFastFlowingDrops() {
+        var strong = RainModel(seed:42), downpour = RainModel(seed:42)
+        var strongPeak: Float = 0
+        var downpourPeak: Float = 0
+        for _ in 0..<90 {
+            strong.step(dt:1/30,size:SIMD2(320,800),intensity:2.4)
+            downpour.step(dt:1/30,size:SIMD2(320,800),intensity:5.6)
+            strongPeak = max(strongPeak,strong.drops.map { $0.speed }.max() ?? 0)
+            downpourPeak = max(downpourPeak,downpour.drops.map { $0.speed }.max() ?? 0)
+        }
+        let strongFast = strong.drops.filter { $0.speed > 160 }.count
+        let downpourFast = downpour.drops.filter { $0.speed > 160 }.count
+        XCTAssertGreaterThan(downpourFast,strongFast)
+        XCTAssertGreaterThan(downpourPeak,strongPeak*1.1)
+    }
+
+    func testDownpourLeavesLongerWiderDirectDropTrails() {
+        var heavy = RainModel(), downpour = RainModel()
+        let drop = Drop(position:SIMD2(100,0),radius:6,speed:150,phase:0,
+                        adhesion:1,speedFactor:1)
+        heavy.add(drop); downpour.add(drop)
+        heavy.step(dt:1/30,size:SIMD2(500,500),intensity:3.8)
+        downpour.step(dt:1/30,size:SIMD2(500,500),intensity:5.6)
+        let heavyTrail = heavy.trails.first { !$0.isRivulet }
+        let downpourTrail = downpour.trails.first { !$0.isRivulet }
+        XCTAssertNotNil(heavyTrail)
+        XCTAssertNotNil(downpourTrail)
+        XCTAssertGreaterThan(downpourTrail?.radius ?? 0,heavyTrail?.radius ?? 0)
+        XCTAssertGreaterThan(downpourTrail?.life ?? 0,heavyTrail?.life ?? 0)
+    }
+
+    func testHeavyBlendsStrongAndDownpourSpeedTiers() {
+        var strong = RainModel(), heavy = RainModel(), downpour = RainModel()
+        let drop = Drop(position:SIMD2(0.5,100),radius:6,speed:150,phase:0,
+                        adhesion:1,speedFactor:1)
+        strong.add(drop); heavy.add(drop); downpour.add(drop)
+        let size = SIMD2<Float>(1,500)
+        strong.step(dt:1/30,size:size,intensity:2.4)
+        heavy.step(dt:1/30,size:size,intensity:3.8)
+        downpour.step(dt:1/30,size:size,intensity:5.6)
+
+        XCTAssertGreaterThan(heavy.drops[0].speed,strong.drops[0].speed)
+        XCTAssertLessThan(heavy.drops[0].speed,downpour.drops[0].speed)
+    }
+
+    func testDownpourAbsorbsSmallDropsIntoDownstreamDirectTrail() {
+        var model = RainModel()
+        model.add(Drop(position:SIMD2(0.5,100),radius:6,speed:150,phase:0,
+                       adhesion:1,speedFactor:1))
+        model.step(dt:1/30,size:SIMD2(1,500),intensity:5.6)
+        let initialTrail = model.trails.first { !$0.isRivulet }
+        XCTAssertNotNil(initialTrail)
+
+        model.add(Drop(position:SIMD2(0.5,101),radius:2,speed:0,phase:0,
+                       adhesion:1,speedFactor:1))
+        model.step(dt:1/30,size:SIMD2(1,500),intensity:5.6)
+
+        let updatedTrail = model.trails.first { !$0.isRivulet }
+        XCTAssertGreaterThan(updatedTrail?.radius ?? 0,initialTrail?.radius ?? 0)
+        XCTAssertEqual(model.drops.count,1)
     }
 
     func testRainUsesMixedStraightAndMeanderingTrajectories() {
