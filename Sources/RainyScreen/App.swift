@@ -262,7 +262,7 @@ final class TransparentMetalView: MTKView {
                 overlay.renderer.renderQuality = renderQuality
                 overlay.renderer.chromaticAberration = chromaticAberration
                 overlay.renderer.wipeAnimation = wipeAnimation
-                overlay.renderer.mistMode = abs(effectiveStrength-mistStrength) < 0.01
+                overlay.renderer.mistMode = mode == "demo" && abs(effectiveStrength-mistStrength) < 0.01
                 overlays.append(overlay)
             }
             apply()
@@ -290,13 +290,13 @@ final class TransparentMetalView: MTKView {
             updateTooltip()
             return
         }
-        let target: Float = mode == "demo" ? effectiveStrength : weatherIntensity*effectiveStrength
+        let target: Float = mode == "demo" ? effectiveStrength : weatherIntensity
         let wasVisible = activeIntensity > 0 || isDrying
         if target > 0 {
             dryingTimer?.invalidate(); dryingTimer = nil; isDrying = false
             activeIntensity = target
             for overlay in overlays {
-                overlay.renderer.mistMode = abs(effectiveStrength-mistStrength) < 0.01
+                overlay.renderer.mistMode = mode == "demo" && abs(effectiveStrength-mistStrength) < 0.01
                 overlay.show(intensity:target)
                 if !wasVisible && refraction && CGPreflightScreenCaptureAccess() { startCapture(overlay) }
             }
@@ -480,13 +480,19 @@ final class TransparentMetalView: MTKView {
         menu.addItem(.separator())
         let intensity = NSMenuItem(title:L10n.text("雨の強さ [\(currentStrengthLabel)]", "Rain Intensity [\(currentStrengthLabel)]"), action:nil, keyEquivalent:"")
         let intensityMenu = NSMenu()
+        intensityMenu.autoenablesItems = false
         for option in rainStrengthOptions {
             let label = L10n.text(option.label, strengthEnglishLabel(option.value))
             let child = item(intensityMenu,label,#selector(setStrength(_:)),checked:!randomStrength && abs(strength-option.value)<0.01)
             child.representedObject = option.value
+            child.isEnabled = mode != "auto"
         }
         let random = item(intensityMenu,L10n.text("ランダム", "Random"),#selector(enableRandomStrength),checked:randomStrength)
         random.toolTip = L10n.text("設定で切替間隔を変更できます", "Change the interval in Settings")
+        random.isEnabled = mode != "auto"
+        if mode == "auto" {
+            intensity.title = L10n.text("雨の強さ [天気に連動]", "Rain Intensity [Weather-controlled]")
+        }
         intensity.submenu = intensityMenu; menu.addItem(intensity)
         let size = NSMenuItem(title:L10n.text("雨粒のサイズ [\(dropScaleLabel)]", "Raindrop Size [\(dropScaleLabel)]"), action:nil, keyEquivalent:"")
         let sizeMenu = NSMenu()
@@ -1225,6 +1231,32 @@ extension AppDelegate {
         let defaults = UserDefaults.standard
         let suiteName = Bundle.main.bundleIdentifier ?? "local.noa.RainGlass"
         let before = defaults.persistentDomain(forName: suiteName) ?? [:]
+        // Exercise the actual mode-to-rendering path with fixed and random
+        // manual settings. Weather strength must pass through unchanged.
+        for manual in rainStrengthOptions.map(\.value) {
+            settingsSetStrength(manual)
+            for random in [false, true] {
+                randomStrength = random
+                randomStrengthValue = manual
+                settingsSetMode("auto")
+                for rain: Float in [0.35, 0.8, 1.4, 3.8, 5.6] {
+                    weatherIntensity = rain
+                    apply()
+                    guard activeIntensity == rain else {
+                        fputs("SETTINGS_STATE_FAILED: manual strength changed weather rendering\n", stderr)
+                        exit(1)
+                    }
+                }
+                settingsSetMode("demo")
+                guard activeIntensity == manual else {
+                    fputs("SETTINGS_STATE_FAILED: rainy mode ignored manual strength\n", stderr)
+                    exit(1)
+                }
+            }
+        }
+        randomStrength = false
+        weatherIntensity = 0
+        settingsSetMode("off")
         let modes = ["auto", "demo", "off"]
         for modeValue in modes {
             settingsSetMode(modeValue)

@@ -37,7 +37,7 @@ Rainy Screen is a macOS menu bar app that turns your connected displays into wet
 
 ## Setup
 
-This project is currently distributed as source. Each user builds a local ad-hoc signed app; no Apple Developer membership is required.
+Build from source using the steps below, or download the latest early beta from [Releases](https://github.com/u2k8090/rainy-screen/releases). Prebuilt apps are ad-hoc signed and are not notarized. No Apple Developer membership is required for local source builds.
 
 ### Requirements
 
@@ -89,12 +89,12 @@ You can use a manually selected location instead of granting location access. Sc
 
 ## Controls
 
-- **Weather Mode** — follows rain, showers, and weather codes from Open-Meteo.
+- **Weather Mode** — automatically adjusts rain intensity from Open-Meteo precipitation and weather codes. The manual rain-strength and random-cycle settings do not affect this mode.
 - **Rainy Mode** — displays rain regardless of the weather.
 - **Stop** — hides the overlays and stops rendering.
 - **Stop toggle shortcut** — restores whichever mode was active before stopping.
 - **Wipe shortcut** — clears the glass from another app using a registered modifier-key combination.
-- **Rain strength** — from mist to downpour, with an optional random cycle.
+- **Rain strength** — from mist to downpour, with an optional random cycle, for Rainy Mode. Disabled in Weather Mode.
 - **Render quality** — High, Balanced, or Light. Particle count stays the same; collision and trail work are reduced at lower levels.
 - **Display selection** — target all displays or a saved subset.
 - **Exclusions** — keep selected application windows clear.
@@ -143,7 +143,7 @@ Public documentation is intentionally limited to this README and the screenshots
 - Apple Silicon only for now.
 - macOS 14 or later is required.
 - The public build is source-first and ad-hoc signed; there is no notarized binary yet.
-- Actual weather, permission changes, sleep/wake, login launch, and physical display reconnection still need manual validation on each Mac.
+- Core real-device checks have been reported by the maintainer. Weather, permissions, sleep/wake, login launch, and display reconnection can still vary across Mac configurations.
 - The liquid model is a real-time approximation, not a full Navier–Stokes simulation or path-traced reconstruction.
 
 ## Contributing
@@ -160,4 +160,4 @@ Please keep changes focused and run `swift test -c release` before opening a pul
 
 ## License
 
-Rainy Screen is released under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE).

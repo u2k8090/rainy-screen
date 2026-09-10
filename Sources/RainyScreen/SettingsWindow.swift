@@ -576,7 +576,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         aberration.target = self; aberration.action = #selector(chromaticAberrationChanged(_:))
         aberration.toolTip = L10n.text("水滴の輪郭に出る色のずれの強さ。背景の屈折と画面収録の許可が必要です。", "Color separation at water edges. Requires background refraction and Screen Recording permission.")
         chromaticAberrationPopup = aberration
-        addCard(L10n.text("雨の見た目", "Rain appearance"), contents: [row(L10n.text("雨の強さ", "Rain intensity"), control: strength), intervalRow, row(L10n.text("雨粒のサイズ", "Raindrop size"), control: size), row(L10n.text("吹き上げ", "Runoff animation"), control: wipe), row(L10n.text("描画FPS", "Frame rate"), control: fps), row(L10n.text("描画品質", "Render quality"), control: quality, detail: L10n.text("衝突計算と雨筋履歴の精度", "Collision and trail-history fidelity")), refract, row(L10n.text("色収差", "Chromatic aberration"),control:aberration)])
+        addCard(L10n.text("雨の見た目", "Rain appearance"), contents: [row(L10n.text("雨の強さ", "Rain intensity"), control: strength, detail: L10n.text("レイニーモード用。ウェザーモードでは天気から自動調整します。", "For Rainy Mode. Weather Mode adjusts intensity automatically.")), intervalRow, row(L10n.text("雨粒のサイズ", "Raindrop size"), control: size), row(L10n.text("吹き上げ", "Runoff animation"), control: wipe), row(L10n.text("描画FPS", "Frame rate"), control: fps), row(L10n.text("描画品質", "Render quality"), control: quality, detail: L10n.text("衝突計算と雨筋履歴の精度", "Collision and trail-history fidelity")), refract, row(L10n.text("色収差", "Chromatic aberration"),control:aberration)])
     }
 
     private func buildLocation() {
@@ -665,11 +665,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             stopToggleShortcutStatusLabel?.stringValue = stopToggleShortcutMessage ?? (snapshot.stopToggleShortcut == nil ? L10n.text("未登録", "Not registered") : "")
         }
         if let popup = strengthPopup {
+            popup.isEnabled = snapshot.mode != "auto"
             if snapshot.randomStrength { popup.selectItem(withTag: 99) }
             else { popup.selectItems(with: { ($0.representedObject as? NSNumber)?.floatValue ?? -1 }, matching: snapshot.strength) }
         }
         randomIntervalPopup?.selectItem(at: snapshot.randomStrengthIntervalIndex)
-        randomIntervalRow?.isHidden = !snapshot.randomStrength
+        randomIntervalRow?.isHidden = !snapshot.randomStrength || snapshot.mode == "auto"
         dropScalePopup?.selectItems(with: { ($0.representedObject as? NSNumber)?.floatValue ?? -1 }, matching: snapshot.dropScale)
         wipeAnimationPopup?.selectItem(withTag: snapshot.wipeAnimation.rawValue)
         frameRatePopup?.selectItem(withTag: snapshot.frameRate)
