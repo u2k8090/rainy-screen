@@ -33,6 +33,11 @@ Rainy Screen is a macOS menu bar app that turns your connected displays into wet
   <img src="docs/media/settings-rain.png" alt="Rain settings window" width="49%">
 </p>
 
+<p align="center">
+  <img src="docs/media/settings-wipe.png" alt="Wipe settings window" width="49%">
+  <img src="docs/media/settings-cursor.png" alt="Cursor effects settings window" width="49%">
+</p>
+
 <p align="center"><i>Rain behavior and settings are still evolving during the early beta.</i></p>
 
 ## Setup

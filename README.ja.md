@@ -33,6 +33,11 @@ Rainy Screenは、接続中のディスプレイに濡れたガラスを重ね�
   <img src="docs/media/settings-rain.png" alt="雨の設定画面" width="49%">
 </p>
 
+<p align="center">
+  <img src="docs/media/settings-wipe.png" alt="吹き上げ設定画面" width="49%">
+  <img src="docs/media/settings-cursor.png" alt="カーソル効果設定画面" width="49%">
+</p>
+
 <p align="center"><i>雨の挙動と設定項目はアーリーベータ期間中に変更される可能性があります。</i></p>
 
 ## セットアップ
