@@ -30,12 +30,12 @@ Rainy Screen is a macOS menu bar app that turns your connected displays into wet
 
 <p align="center">
   <img src="docs/media/rainy-screen-through-flow.png" alt="Irregular through-flow rivulets in heavy rain" width="49%">
-  <img src="docs/media/settings-rain.png" alt="Rain settings window" width="49%">
+  <img src="docs/media/settings-rain-en.png" alt="Rain settings window" width="49%">
 </p>
 
 <p align="center">
-  <img src="docs/media/settings-wipe.png" alt="Wipe settings window" width="49%">
-  <img src="docs/media/settings-cursor.png" alt="Cursor effects settings window" width="49%">
+  <img src="docs/media/settings-wipe-en.png" alt="Wipe settings window" width="49%">
+  <img src="docs/media/settings-cursor-en.png" alt="Cursor effects settings window" width="49%">
 </p>
 
 <p align="center"><i>Rain behavior and settings are still evolving during the early beta.</i></p>
@@ -89,7 +89,7 @@ Rainy Screen can run without screen capture or location access, but some feature
 You can use a manually selected location instead of granting location access. Screen capture is processed in memory and is not saved or uploaded.
 
 <p align="center">
-  <img src="docs/media/settings-shortcuts.png" alt="Shortcut settings window" width="820">
+  <img src="docs/media/settings-shortcuts-en.png" alt="Shortcut settings window" width="820">
 </p>
 
 ## Controls
