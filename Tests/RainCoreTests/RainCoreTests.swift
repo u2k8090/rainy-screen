@@ -44,6 +44,57 @@ final class RainCoreTests: XCTestCase {
         XCTAssertTrue(model.drops.isEmpty)
         XCTAssertTrue(model.trails.isEmpty)
     }
+
+    func testBlowerAddsRadialImpulseWithFiniteTravelWithoutDeletingWater() {
+        var model = RainModel()
+        model.add(Drop(position: SIMD2(180,100), radius: 3))
+        model.add(Drop(position: SIMD2(100,180), radius: 3))
+        model.blow(at: SIMD2(100,100), radius: 120, strength: .standard)
+        XCTAssertEqual(model.drops.count, 2)
+        XCTAssertGreaterThan(model.drops[0].blowVelocity.x, 0)
+        XCTAssertGreaterThan(model.drops[1].blowVelocity.y, 0)
+        let before = model.drops[0].position
+        model.step(dt: 1/30, size: SIMD2(800,600), intensity: 0)
+        XCTAssertGreaterThan(model.drops[0].position.x, before.x)
+        XCTAssertGreaterThan(model.drops[0].blowRemaining, 0)
+        XCTAssertTrue(model.trails.isEmpty, "小さな吹き飛ばし中の滴は筋を残さず粒で飛ぶ")
+        for _ in 0..<240 { model.step(dt: 1/30, size: SIMD2(800,600), intensity: 0) }
+        XCTAssertEqual(model.drops.first?.blowRemaining ?? 0, 0, accuracy: 0.001)
+
+        var large = RainModel()
+        large.add(Drop(position: SIMD2(180,100), radius: 6))
+        large.blow(at: SIMD2(100,100), radius: 120, strength: .standard)
+        large.step(dt: 1/30, size: SIMD2(800,600), intensity: 0)
+        XCTAssertFalse(large.trails.isEmpty, "大きな滴は吹き飛ばし中も薄い筋を残す")
+    }
+
+    func testBlowerStrengthExpandsItsAffectedArea() {
+        var minimum = RainModel()
+        var standard = RainModel()
+        let edge = SIMD2<Float>(220,100)
+        minimum.add(Drop(position:edge,radius:3))
+        standard.add(Drop(position:edge,radius:3))
+        let center = SIMD2<Float>(100,100)
+        minimum.blow(at:center, radius:100*BlowerStrength.verySoft.radiusMultiplier,
+                     strength:.verySoft)
+        standard.blow(at:center, radius:100*BlowerStrength.standard.radiusMultiplier,
+                      strength:.standard)
+        XCTAssertEqual(minimum.drops[0].blowVelocity,.zero)
+        XCTAssertGreaterThan(standard.drops[0].blowVelocity.x,0)
+    }
+
+    func testBlowerDoesNotSlideThroughFlowChannels() {
+        var model = RainModel()
+        for _ in 0..<600 { model.step(dt: 1/30, size: SIMD2(1000,800), intensity: 5.6) }
+        guard let index = model.rivulets.firstIndex(where: { $0.isThroughFlow }) else {
+            XCTFail("豪雨のthrough-flowが生成されていない")
+            return
+        }
+        let before = model.rivulets[index].position
+        model.blow(at: before, radius: 240, strength: .veryStrong)
+        XCTAssertEqual(model.rivulets[index].position, before,
+                       "through-flow水路はブロワーで横滑りしない")
+    }
     func testGrowthBoundsClearAndDry() {
         var model = RainModel()
         model.step(dt:1/30,size:SIMD2(1000,800),intensity:0)
@@ -369,6 +420,25 @@ final class RainCoreTests: XCTestCase {
         for _ in 0..<25 { _ = fading.step(dt:1/30,size:SIMD2(500,800),intensity:5.6) }
         XCTAssertLessThan(fading.width,1)
         XCTAssertTrue(fading.isExpired)
+    }
+
+    func testThroughFlowHasConnectedTaperedBends() {
+        var flow = Rivulet(position: SIMD2(200,-40),baseWidth:8,speed:100,
+                           phase:1,drift:0,wobble:0,isThroughFlow:true,
+                           lifetime:30,birthDuration:0)
+        _ = flow.step(dt:1/30,size:SIMD2(1000,800),intensity:5.6)
+        let segments = flow.continuousSegments(size:SIMD2(1000,800))
+        XCTAssertEqual(segments.first?.position.y,0)
+        XCTAssertEqual(segments.last?.end.y,800)
+        for (a,b) in zip(segments,segments.dropFirst()) {
+            XCTAssertEqual(a.end,b.position)
+            XCTAssertEqual(a.endRadius,b.radius)
+            XCTAssertLessThanOrEqual(a.end.y-a.position.y,8.01)
+            let da = a.end-a.position, db = b.end-b.position
+            let bend = abs(atan2(da.x,da.y)-atan2(db.x,db.y))
+            XCTAssertLessThan(bend,0.06,"Channel samples must not form visible corners")
+        }
+        XCTAssertTrue(segments.contains { abs(($0.endRadius ?? $0.radius)-$0.radius) > 0.01 })
     }
 
     func testDownpourAddsMoreWaterAndStaysBounded() {

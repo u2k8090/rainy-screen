@@ -8,6 +8,21 @@ enum WipeAnimation: Int {
     case vertical = 1
 }
 
+enum WipeSpeed: Int, CaseIterable {
+    case slowest = 0, slow, standard, fast, fastest
+
+    var multiplier: Float {
+        switch self {
+        case .slowest: return 0.25
+        case .slow: return 0.5
+        case .standard: return 1
+        case .fast: return 2
+        case .fastest: return 4
+        }
+    }
+    var duration: Float { 1 / multiplier }
+}
+
 enum ChromaticAberration {
     static let levels: [Float] = [0,1,2,4,8,16]
 }
@@ -22,6 +37,7 @@ struct Uniforms {
     var wipeRadius: Float = 55
     var hasCapture: Float = 0
     var wipe: Float = 0
+    var blowerClearStrength: Float = 0
     var dropScale: Float = 1
     var mist: Float = 0
     var exclusionCount: Float = 0
@@ -37,6 +53,7 @@ struct GPUDrop {
     var phase: Float = 0
     var tilt: Float = 0
     var kind: Float = 0
+    var endWidthRatio: SIMD2<Float> = .zero
 }
 
 final class RainRenderer: NSObject, MTKViewDelegate {
@@ -70,6 +87,11 @@ final class RainRenderer: NSObject, MTKViewDelegate {
     var renderQuality: RainRenderQuality = .high
     var chromaticAberration: Float = 1
     var wipeAnimation: WipeAnimation = .drain
+    var wipeSpeed: WipeSpeed = .standard
+    var cursorEffect: CursorEffect = .wipe
+    var blowerStrength: BlowerStrength = .standard
+    var blowerSize: BlowerSize = .standard
+    var isWiping: Bool { clearAnimationProgress != nil }
     /// Screen-local rectangles where the rain layer must be transparent.
     /// The app delegate updates these from the current allowlisted app windows.
     var exclusionRects: [SIMD4<Float>] = []
@@ -185,7 +207,7 @@ final class RainRenderer: NSObject, MTKViewDelegate {
         u.chromaticAberration = chromaticAberration
         let sweeping = clearAnimationProgress != nil
         if let progress = clearAnimationProgress {
-            let next = min(1,progress+dt/1.0)
+            let next = min(1,progress+dt/wipeSpeed.duration)
             let vertical = wipeAnimation == .vertical
             u.sweepAxis = vertical ? 1 : 0
             let extent = (vertical ? size.y : size.x)+40*dropScale
@@ -208,10 +230,25 @@ final class RainRenderer: NSObject, MTKViewDelegate {
         let global = NSEvent.mouseLocation
         let mouse = SIMD2<Float>(Float(global.x-screenFrame.minX),Float(screenFrame.maxY-global.y))
         if !sweeping && screenFrame.contains(global) {
-            if let last = previousMouse, last != mouse {
-                u.wipe = 1; u.previousMouse = last; u.mouse = mouse
-                model.wipe(from: last/dropScale, to: mouse/dropScale,
-                           radius: wipeRadius/dropScale, size:size/dropScale)
+            switch cursorEffect {
+            case .none:
+                break
+            case .wipe:
+                let wipeEffectRadius = wipeRadius*blowerSize.multiplier
+                if let last = previousMouse, last != mouse {
+                    u.wipe = 1; u.wipeRadius = wipeEffectRadius
+                    u.previousMouse = last; u.mouse = mouse
+                    model.wipe(from: last/dropScale, to: mouse/dropScale,
+                               radius: wipeEffectRadius/dropScale, size:size/dropScale)
+                }
+            case .blower:
+                let blowerRadius = wipeRadius*blowerStrength.radiusMultiplier/dropScale
+                u.mouse = mouse
+                u.wipeRadius = blowerRadius
+                u.blowerClearStrength = blowerStrength.clearRate
+                model.blow(at: mouse/dropScale,
+                           radius: blowerRadius,
+                           strength: blowerStrength)
             }
             previousMouse = mouse
         } else { previousMouse = nil }
@@ -243,6 +280,14 @@ final class RainRenderer: NSObject, MTKViewDelegate {
         func gpuTrail(_ trail: Trail) -> GPUDrop {
             let delta = trail.end-trail.position
             let length = sqrt(delta.x*delta.x+delta.y*delta.y)
+            if let endRadius = trail.endRadius {
+                let maxRadius = max(trail.radius,endRadius)
+                return GPUDrop(position:(trail.position+trail.end)*0.5*dropScale,
+                               radius:SIMD2(maxRadius,length*0.5+maxRadius)*dropScale,
+                               strength:0.18*trail.life*trail.life,
+                               phase:trail.radius/maxRadius,tilt:-atan2(delta.x,delta.y),
+                               kind:1.4,endWidthRatio:SIMD2(endRadius/maxRadius,0))
+            }
             let trailStrength = trail.isThroughFlow
                 ? trail.radius*0.18*trail.life*trail.life
                 : (trail.isRivulet

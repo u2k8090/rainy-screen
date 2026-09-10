@@ -94,7 +94,9 @@ You can use a manually selected location instead of granting location access. Sc
 - **Stop** — hides the overlays and stops rendering.
 - **Stop toggle shortcut** — restores whichever mode was active before stopping.
 - **Wipe shortcut** — clears the glass from another app using a registered modifier-key combination.
+- **Cursor effects** — choose None, Wipe, or Blower. Wipe has five size levels from 0.5× to 2×. Blower sends nearby droplets and rivulets radially away from the cursor, with five strength levels that control impulse, travel distance, affected area, and fog clearing speed; after a finite travel distance, normal gravity and adhesion resume.
 - **Rain strength** — from mist to downpour, with an optional random cycle, for Rainy Mode. Disabled in Weather Mode.
+- **Wipe settings** — a dedicated Wipe category for horizontal/vertical direction and five speeds: 0.25×, 0.5×, 1× (original), 2×, and 4×. Settings are saved.
 - **Render quality** — High, Balanced, or Light. Particle count stays the same; collision and trail work are reduced at lower levels.
 - **Display selection** — target all displays or a saved subset.
 - **Exclusions** — keep selected application windows clear.

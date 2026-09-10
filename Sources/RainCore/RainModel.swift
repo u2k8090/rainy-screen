@@ -125,6 +125,9 @@ public struct Drop {
     public var wobble: Float
     /// Probability bias for contact-line pinning and temporary stops.
     public var stallTendency: Float
+    /// Lateral impulse from the optional cursor blower effect.
+    public var blowVelocity: SIMD2<Float> = .zero
+    public var blowRemaining: Float = 0
     /// Hysteresis state for static/dynamic contact resistance.
     /// A drop needs more force to start moving than it needs to keep moving.
     public var isMoving: Bool = false
@@ -154,6 +157,8 @@ public struct Trail {
     public var volume: Float = 0
     public var isRivulet: Bool = false
     public var isThroughFlow: Bool = false
+    /// Endpoint width for continuous channels; ordinary deposited trails stay uniform.
+    public var endRadius: Float? = nil
 }
 public enum RainRenderQuality: Int, CaseIterable {
     case high = 0
@@ -176,6 +181,73 @@ public enum RainRenderQuality: Int, CaseIterable {
         }
     }
 }
+
+public enum CursorEffect: Int, CaseIterable {
+    case none = 0
+    case wipe = 1
+    case blower = 2
+}
+
+public enum BlowerStrength: Int, CaseIterable {
+    case verySoft = 0, soft, standard, strong, veryStrong
+
+    public var impulse: Float {
+        switch self {
+        case .verySoft: return 150
+        case .soft: return 220
+        case .standard: return 300
+        case .strong: return 410
+        case .veryStrong: return 560
+        }
+    }
+
+    public var travelDistance: Float {
+        switch self {
+        case .verySoft: return 45
+        case .soft: return 70
+        case .standard: return 100
+        case .strong: return 140
+        case .veryStrong: return 190
+        }
+    }
+
+    /// The current blower radius is the minimum area. Stronger settings
+    /// expand the affected circle together with the impulse and travel.
+    public var radiusMultiplier: Float {
+        switch self {
+        case .verySoft: return 1.0
+        case .soft: return 2.25
+        case .standard: return 3.5
+        case .strong: return 4.75
+        case .veryStrong: return 6.0
+        }
+    }
+
+    public var clearRate: Float {
+        switch self {
+        case .verySoft: return 0.5
+        case .soft: return 1.0
+        case .standard: return 1.5
+        case .strong: return 2.25
+        case .veryStrong: return 3.0
+        }
+    }
+}
+
+public enum BlowerSize: Int, CaseIterable {
+    case smallest = 0, small, standard, large, largest
+
+    public var multiplier: Float {
+        switch self {
+        case .smallest: return 0.5
+        case .small: return 0.75
+        case .standard: return 1.0
+        case .large: return 1.5
+        case .largest: return 2.0
+        }
+    }
+}
+
 public struct RainModel {
     public private(set) var drops: [Drop] = []
     public private(set) var trails: [Trail] = []
@@ -212,6 +284,34 @@ public struct RainModel {
                 }
             }
             return segmentDistance(rivulet.position,a,b) < radius+rivulet.width
+        }
+    }
+
+    public mutating func blow(at center: SIMD2<Float>, radius: Float, strength: BlowerStrength) {
+        guard radius > 0 else { return }
+        for index in drops.indices {
+            let delta = drops[index].position-center
+            let distance = sqrt(delta.x*delta.x + delta.y*delta.y)
+            let falloff = max(0,1-distance/radius)
+            guard falloff > 0 else { continue }
+            let direction = distance > 0.01 ? delta/distance : SIMD2<Float>(0,-1)
+            drops[index].blowVelocity += direction*(strength.impulse*falloff*falloff)
+            drops[index].blowRemaining = max(drops[index].blowRemaining,
+                                              strength.travelDistance*max(0.35,falloff))
+            drops[index].isMoving = true
+        }
+        for index in rivulets.indices {
+            // Heavy/deluge through-flows are persistent channels anchored to
+            // the glass. Blowing individual droplets must not slide the whole
+            // river sideways; only ordinary local rivulets can be displaced.
+            guard !rivulets[index].isThroughFlow else { continue }
+            let delta = rivulets[index].position-center
+            let distance = sqrt(delta.x*delta.x + delta.y*delta.y)
+            let falloff = max(0,1-distance/radius)
+            guard falloff > 0 else { continue }
+            let direction = distance > 0.01 ? delta/distance : SIMD2<Float>(0,-1)
+            rivulets[index].blow(direction:direction,
+                                  amount:strength.impulse*falloff*falloff)
         }
     }
     public mutating func beginSweep(vertical: Bool = false) {
@@ -352,6 +452,19 @@ public struct RainModel {
         for i in drops.indices {
             var d = drops[i]
             d.previous = d.position; d.age += dt
+            if d.blowRemaining > 0 && (d.blowVelocity.x != 0 || d.blowVelocity.y != 0) {
+                let displacement = d.blowVelocity*dt
+                let distance = sqrt(displacement.x*displacement.x + displacement.y*displacement.y)
+                let scale = distance > d.blowRemaining ? d.blowRemaining/distance : 1
+                d.position += displacement*scale
+                d.blowRemaining = max(0,d.blowRemaining-distance*scale)
+                d.blowVelocity *= exp(-dt*2.8)
+                let remainingSpeed = sqrt(d.blowVelocity.x*d.blowVelocity.x + d.blowVelocity.y*d.blowVelocity.y)
+                if d.blowRemaining == 0 || remainingSpeed < 1 {
+                    d.blowRemaining = 0
+                    d.blowVelocity = .zero
+                }
+            }
             d.stallCooldown = max(0,d.stallCooldown-dt)
             var stalled = false
             if d.stallTimer > 0 {
@@ -465,15 +578,19 @@ public struct RainModel {
             d.volume += (isMist ? 0.65 : baseIntensity)*dt*r*0.15
             let delta = d.position-d.previous
             let length = sqrt(delta.x*delta.x+delta.y*delta.y)
-            if length > 0.35 {
+            let blowerTrailFactor: Float = d.blowRemaining > 0
+                ? min(0.35,max(0,(r-4.0)*0.12))
+                : 1
+            if length > 0.35 && blowerTrailFactor > 0.01 {
                 // The rivulet keeps the moving drop's radius instead of using
                 // one global stroke width. A lower floor keeps tiny beads
                 // visible while the larger beads leave clearly wider tracks.
                 let trailScale = 1+delugeBlend*(FlowTuning.delugeTrailWidthScale-1)
-                let width = max(0.36,r*0.34)*trailScale
+                let width = max(0.36,r*0.34)*trailScale*blowerTrailFactor
                 let depositScale = 1+delugeBlend*(FlowTuning.delugeTrailDepositScale-1)
-                let deposited = min(max(0,d.volume-0.001),length*width*0.035*depositScale)
-                trails.append(Trail(position:d.previous,end:d.position,radius:width,life:1,volume:deposited))
+                let deposited = min(max(0,d.volume-0.001),length*width*0.035*depositScale*blowerTrailFactor)
+                trails.append(Trail(position:d.previous,end:d.position,radius:width,
+                                    life:blowerTrailFactor < 1 ? 0.45 : 1,volume:deposited))
                 d.volume -= deposited
             }
             drops[i] = d

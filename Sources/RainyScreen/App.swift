@@ -86,6 +86,10 @@ final class TransparentMetalView: MTKView {
     private var chromaticAberration: Float = 1
     private var dropScale: Float = 1
     private var wipeAnimation: WipeAnimation = .drain
+    private var wipeSpeed: WipeSpeed = .standard
+    private var cursorEffect: CursorEffect = .wipe
+    private var blowerStrength: BlowerStrength = .standard
+    private var blowerSize: BlowerSize = .standard
     private let dropScales: [Float] = [1,1.25,1.5,1.75,2,2.5]
     private var suspended = false
     private var activeIntensity: Float = 0
@@ -202,6 +206,10 @@ final class TransparentMetalView: MTKView {
                                                   "resetOnMissionControl":false,"excludedAppBundleIDs":[String](),
                                                   "randomStrength":false,"randomStrengthInterval":2,
                                                   "wipeAnimation":WipeAnimation.drain.rawValue,
+                                                  "wipeSpeed":WipeSpeed.standard.rawValue,
+                                                  "cursorEffect":CursorEffect.wipe.rawValue,
+                                                  "blowerStrength":BlowerStrength.standard.rawValue,
+                                                  "blowerSize":BlowerSize.standard.rawValue,
                                                   "languagePreference": L10n.Preference.system.rawValue])
         strength = UserDefaults.standard.object(forKey:"strength") as? Float ?? 1.4
         randomStrength = UserDefaults.standard.bool(forKey:"randomStrength")
@@ -217,6 +225,10 @@ final class TransparentMetalView: MTKView {
         renderQuality = RainRenderQuality(rawValue:savedQuality) ?? .high
         let savedScale = UserDefaults.standard.float(forKey:"dropScale")
         dropScale = dropScales.contains(savedScale) ? savedScale : 1
+        wipeSpeed = WipeSpeed(rawValue: UserDefaults.standard.integer(forKey:"wipeSpeed")) ?? .standard
+        cursorEffect = CursorEffect(rawValue: UserDefaults.standard.integer(forKey:"cursorEffect")) ?? .wipe
+        blowerStrength = BlowerStrength(rawValue: UserDefaults.standard.integer(forKey:"blowerStrength")) ?? .standard
+        blowerSize = BlowerSize(rawValue: UserDefaults.standard.integer(forKey:"blowerSize")) ?? .standard
         wipeAnimation = WipeAnimation(rawValue: UserDefaults.standard.integer(forKey:"wipeAnimation")) ?? .drain
         resetOnMissionControl = UserDefaults.standard.bool(forKey:"resetOnMissionControl")
         excludedAppBundleIDs = Set(UserDefaults.standard.stringArray(forKey:"excludedAppBundleIDs") ?? [])
@@ -262,6 +274,10 @@ final class TransparentMetalView: MTKView {
                 overlay.renderer.renderQuality = renderQuality
                 overlay.renderer.chromaticAberration = chromaticAberration
                 overlay.renderer.wipeAnimation = wipeAnimation
+                overlay.renderer.wipeSpeed = wipeSpeed
+                overlay.renderer.cursorEffect = cursorEffect
+                overlay.renderer.blowerStrength = blowerStrength
+                overlay.renderer.blowerSize = blowerSize
                 overlay.renderer.mistMode = mode == "demo" && abs(effectiveStrength-mistStrength) < 0.01
                 overlays.append(overlay)
             }
@@ -900,6 +916,11 @@ final class TransparentMetalView: MTKView {
             renderer.intensity = 1.4
             if let index = CommandLine.arguments.firstIndex(of:"--intensity"), index+1 < CommandLine.arguments.count,
                let value = Float(CommandLine.arguments[index+1]), value > 0, value <= 8.4 { renderer.intensity = value }
+            if let index = CommandLine.arguments.firstIndex(of:"--wipe-speed"), index+1 < CommandLine.arguments.count,
+               let multiplier = Float(CommandLine.arguments[index+1]),
+               let speed = WipeSpeed.allCases.first(where: { $0.multiplier == multiplier }) {
+                renderer.wipeSpeed = speed
+            }
             renderer.preparePreview()
             if let index = CommandLine.arguments.firstIndex(of:"--chromatic-aberration"), index+1 < CommandLine.arguments.count,
                let value = Float(CommandLine.arguments[index+1]), ChromaticAberration.levels.contains(value) {
@@ -925,15 +946,17 @@ final class TransparentMetalView: MTKView {
                 DispatchQueue.main.asyncAfter(deadline:.now()+4.0) {
                     renderer.snapshotURL = output.appendingPathComponent(prefix+"rain-clearing.png")
                 }
-                DispatchQueue.main.asyncAfter(deadline:.now()+4.7) {
+                let wipeDelay = Double(max(0,renderer.wipeSpeed.duration-1))
+                DispatchQueue.main.asyncAfter(deadline:.now()+4.7+wipeDelay) {
                     renderer.snapshotURL = output.appendingPathComponent(prefix+"rain-clear.png")
                 }
-                DispatchQueue.main.asyncAfter(deadline:.now()+6.2) {
+                DispatchQueue.main.asyncAfter(deadline:.now()+6.2+wipeDelay) {
                     renderer.snapshotURL = output.appendingPathComponent(prefix+"rain-runoff.png")
                 }
-                DispatchQueue.main.asyncAfter(deadline:.now()+6.9) {
+                DispatchQueue.main.asyncAfter(deadline:.now()+6.9+wipeDelay) {
                     if let error = renderer.gpuError { fputs("SMOKE_FAILED: \(error)\n",stderr); exit(1) }
                     guard renderer.completedFrames > 10 else { fputs("SMOKE_FAILED: no GPU frames\n",stderr); exit(1) }
+                    guard !renderer.isWiping else { fputs("SMOKE_FAILED: wipe did not finish\n",stderr); exit(1) }
                     print("SMOKE_OK: \(renderer.completedFrames) GPU frames completed; wet/wiped previews saved; \(NSScreen.screens.count) displays detected")
                     NSApp.terminate(nil)
                 }
@@ -949,6 +972,10 @@ struct RainyScreenSettingsSnapshot {
     let randomStrengthIntervalIndex: Int
     let dropScale: Float
     let wipeAnimation: WipeAnimation
+    let wipeSpeed: WipeSpeed
+    let cursorEffect: CursorEffect
+    let blowerStrength: BlowerStrength
+    let blowerSize: BlowerSize
     let frameRate: Int
     let renderQuality: RainRenderQuality
     let refraction: Bool
@@ -976,7 +1003,7 @@ extension AppDelegate {
     func settingsSnapshot() -> RainyScreenSettingsSnapshot {
         RainyScreenSettingsSnapshot(mode: mode, strength: strength,
             randomStrength: randomStrength, randomStrengthIntervalIndex: randomStrengthIntervalIndex,
-            dropScale: dropScale, wipeAnimation: wipeAnimation, frameRate: frameRate, renderQuality: renderQuality, refraction: refraction,
+            dropScale: dropScale, wipeAnimation: wipeAnimation, wipeSpeed: wipeSpeed, cursorEffect: cursorEffect, blowerStrength: blowerStrength, blowerSize: blowerSize, frameRate: frameRate, renderQuality: renderQuality, refraction: refraction,
             chromaticAberration: chromaticAberration,
             resetOnMissionControl: resetOnMissionControl, allDisplays: allDisplays,
             selectedDisplayIDs: selectedDisplayIDs, wipeShortcut: wipeShortcut,
@@ -1051,6 +1078,38 @@ extension AppDelegate {
         wipeAnimation = value
         persist(value.rawValue, key:"wipeAnimation")
         for overlay in overlays { overlay.renderer.wipeAnimation = value }
+        postStateChange()
+        refreshSettingsWindow()
+    }
+
+    func settingsSetWipeSpeed(_ value: WipeSpeed) {
+        wipeSpeed = value
+        persist(value.rawValue, key:"wipeSpeed")
+        for overlay in overlays { overlay.renderer.wipeSpeed = value }
+        postStateChange()
+        refreshSettingsWindow()
+    }
+
+    func settingsSetCursorEffect(_ value: CursorEffect) {
+        cursorEffect = value
+        persist(value.rawValue, key:"cursorEffect")
+        for overlay in overlays { overlay.renderer.cursorEffect = value }
+        postStateChange()
+        refreshSettingsWindow()
+    }
+
+    func settingsSetBlowerStrength(_ value: BlowerStrength) {
+        blowerStrength = value
+        persist(value.rawValue, key:"blowerStrength")
+        for overlay in overlays { overlay.renderer.blowerStrength = value }
+        postStateChange()
+        refreshSettingsWindow()
+    }
+
+    func settingsSetBlowerSize(_ value: BlowerSize) {
+        blowerSize = value
+        persist(value.rawValue, key:"blowerSize")
+        for overlay in overlays { overlay.renderer.blowerSize = value }
         postStateChange()
         refreshSettingsWindow()
     }
@@ -1290,6 +1349,38 @@ extension AppDelegate {
             exit(1)
         }
         settingsSetDropScale(1.75)
+        for speed in WipeSpeed.allCases {
+            settingsSetWipeSpeed(speed)
+            guard settingsSnapshot().wipeSpeed == speed else {
+                fputs("SETTINGS_STATE_FAILED: wipe speed synchronization mismatch\n", stderr)
+                exit(1)
+            }
+        }
+        settingsSetWipeSpeed(.standard)
+        for effect in CursorEffect.allCases {
+            settingsSetCursorEffect(effect)
+            guard settingsSnapshot().cursorEffect == effect else {
+                fputs("SETTINGS_STATE_FAILED: cursor effect synchronization mismatch\n", stderr)
+                exit(1)
+            }
+        }
+        settingsSetCursorEffect(.wipe)
+        for blower in BlowerStrength.allCases {
+            settingsSetBlowerStrength(blower)
+            guard settingsSnapshot().blowerStrength == blower else {
+                fputs("SETTINGS_STATE_FAILED: blower strength synchronization mismatch\n", stderr)
+                exit(1)
+            }
+        }
+        settingsSetBlowerStrength(.standard)
+        for size in BlowerSize.allCases {
+            settingsSetBlowerSize(size)
+            guard settingsSnapshot().blowerSize == size else {
+                fputs("SETTINGS_STATE_FAILED: blower size synchronization mismatch\n", stderr)
+                exit(1)
+            }
+        }
+        settingsSetBlowerSize(.standard)
         settingsSetWipeAnimation(.vertical)
         settingsSetFrameRate(60)
         settingsSetRenderQuality(.balanced)
@@ -1300,6 +1391,9 @@ extension AppDelegate {
         let configured = settingsSnapshot()
         guard abs(configured.dropScale - 1.75) < 0.01,
               configured.wipeAnimation == .vertical,
+              configured.wipeSpeed == .standard,
+              configured.blowerStrength == .standard,
+              configured.blowerSize == .standard,
               configured.chromaticAberration == 8,
               configured.frameRate == 60,
               configured.renderQuality == .balanced,

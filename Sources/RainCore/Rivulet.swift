@@ -108,12 +108,21 @@ public struct Rivulet {
         speed = max(12, speed*0.35)
     }
 
+    public mutating func blow(direction: SIMD2<Float>, amount: Float) {
+        guard amount > 0 else { return }
+        let shift = direction * min(90, amount*0.18)
+        position += shift
+        previous += shift
+        anchorX += shift.x
+    }
+
     /// Returns a continuously connected path from the top edge to the bottom
     /// edge. The path is a visual water channel; the moving head and deposited
     /// segments still provide the flow timing and optical displacement.
     public func continuousSegments(size: SIMD2<Float>) -> [Trail] {
         guard isThroughFlow, size.x > 0, size.y > 0, !isExpired, width > 0.15 else { return [] }
-        let count = max(10,Int(size.y/48))
+        // Dense samples keep bends smooth without changing the channel path.
+        let count = max(10,Int(ceil(size.y/8)))
         let step = size.y/Float(count)
         // Keep the channel attached to the glass. The water mass travels
         // downward through it; the entire river should not sway like smoke.
@@ -134,11 +143,7 @@ public struct Rivulet {
         result.reserveCapacity(count)
         let birth = birthDuration > 0 ? min(1,max(0,age/birthDuration)) : 1
         let fade = min(1,max(0,(lifetime-age)/fadeDuration))*birth
-        for index in 0..<count {
-            let y0 = Float(index)*step
-            let y1 = Float(index+1)*step
-            let p0 = SIMD2(x(at:y0),y0)
-            let p1 = SIMD2(x(at:y1),y1)
+        func radius(at y0: Float) -> Float {
             // Water gathers into pools and pinches at contact-line bottlenecks.
             // Keep the modulation smooth so it forms one liquid body rather
             // than a row of equally sized droplets.
@@ -158,8 +163,14 @@ public struct Rivulet {
             let massGain = 0.9 + depth*(0.25+rainFeed*0.4)
             let movingPool = 0.78 + 0.46*(0.5+0.5*sin(flowingY*0.012+phase*2.37))
             let localWidth = width*massGain*slowPool*middlePool*movingPool*birth
-            result.append(Trail(position:p0,end:p1,radius:max(0.15,localWidth),life:fade,
-                                volume:0,isRivulet:true,isThroughFlow:true))
+            return max(0.15,localWidth)
+        }
+        for index in 0..<count {
+            let y0 = Float(index)*step
+            let y1 = Float(index+1)*step
+            result.append(Trail(position:SIMD2(x(at:y0),y0),end:SIMD2(x(at:y1),y1),
+                                radius:radius(at:y0),life:fade,volume:0,
+                                isRivulet:true,isThroughFlow:true,endRadius:radius(at:y1)))
         }
         return result
     }

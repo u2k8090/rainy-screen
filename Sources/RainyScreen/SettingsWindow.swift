@@ -38,6 +38,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var randomIntervalRow: NSView?
     private var dropScalePopup: NSPopUpButton?
     private var wipeAnimationPopup: NSPopUpButton?
+    private var wipeSpeedPopup: NSPopUpButton?
+    private var cursorEffectPopup: NSPopUpButton?
+    private var blowerStrengthPopup: NSPopUpButton?
+    private var blowerStrengthRow: NSView?
+    private var blowerSizePopup: NSPopUpButton?
+    private var blowerSizeRow: NSView?
     private var frameRatePopup: NSPopUpButton?
     private var renderQualityPopup: NSPopUpButton?
     private var refractionButton: NSButton?
@@ -59,6 +65,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         ("command", "Shortcuts", "ショートカット", "Keyboard shortcuts"),
         ("rectangle.slash", "Exclusions", "除外", "Excluded apps"),
         ("cloud.rain", "Rain", "雨", "Rain appearance"),
+        ("wind", "Wipe", "吹き上げ", "Wipe animation"),
+        ("cursorarrow", "Cursor", "カーソル", "Cursor effects"),
         ("location", "Location", "場所", "Weather location"),
         ("checkmark.shield", "Setup", "セットアップ", "Permissions and setup"),
         ("info.circle", "About", "このアプリについて", "About Rainy Screen")
@@ -156,8 +164,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 catch { fputs("SETTINGS_SMOKE_FAILED: \(error)\n", stderr); exit(1) }
             }
         }
-        guard snapshotCount == 14 else {
-            fputs("SETTINGS_SMOKE_FAILED: expected 14 snapshots, got \(snapshotCount)\n", stderr)
+        guard snapshotCount == tabs.count * languages.count else {
+            fputs("SETTINGS_SMOKE_FAILED: expected \(tabs.count * languages.count) snapshots, got \(snapshotCount)\n", stderr)
             exit(1)
         }
         print("SETTINGS_SMOKE_OK: \(snapshotCount) pane snapshots saved to \(directory.path)")
@@ -336,7 +344,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func tabSubtitle(_ index: Int) -> String {
-        let japanese = ["一般設定", "キーボードショートカット", "除外するアプリ", "雨の表示設定", "天気を取得する場所", "権限とセットアップ", "Rainy Screenについて"]
+        let japanese = ["一般設定", "キーボードショートカット", "除外するアプリ", "雨の表示設定", "吹き上げのタイプと速度", "カーソル効果", "天気を取得する場所", "権限とセットアップ", "Rainy Screenについて"]
         guard tabs.indices.contains(index), japanese.indices.contains(index) else { return "" }
         return L10n.text(japanese[index], tabs[index].3)
     }
@@ -351,7 +359,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         languagePopup = nil; loginButton = nil; modePopup = nil; allDisplaysButton = nil
         displayButtons.removeAll(); missionControlButton = nil; shortcutRecorder = nil; shortcutDirty = false; shortcutMessage = nil
         shortcutStatusLabel = nil; strengthPopup = nil; randomIntervalPopup = nil; randomIntervalRow = nil
-        dropScalePopup = nil; wipeAnimationPopup = nil; frameRatePopup = nil; refractionButton = nil
+        dropScalePopup = nil; wipeAnimationPopup = nil; wipeSpeedPopup = nil; cursorEffectPopup = nil; blowerStrengthPopup = nil; blowerStrengthRow = nil; blowerSizePopup = nil; blowerSizeRow = nil; frameRatePopup = nil; refractionButton = nil
         chromaticAberrationPopup = nil
         exclusionButtons.removeAll(); locationLabel = nil; locationStatusLabel = nil
         locationPermissionLabel = nil; capturePermissionLabel = nil; captureStatusLabel = nil
@@ -361,8 +369,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         case 1: buildShortcuts()
         case 2: buildExclusions()
         case 3: buildRain()
-        case 4: buildLocation()
-        case 5: buildSetup()
+        case 4: buildWipe()
+        case 5: buildCursor()
+        case 6: buildLocation()
+        case 7: buildSetup()
         default: buildAbout()
         }
         refreshFromApp()
@@ -548,13 +558,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let size = NSPopUpButton()
         for value in [Float(1), 1.25, 1.5, 1.75, 2, 2.5] { size.addItem(withTitle: String(format: "%.3gx", value)); size.lastItem?.representedObject = value }
         size.target = self; size.action = #selector(dropScaleChanged(_:)); dropScalePopup = size
-        let wipe = NSPopUpButton()
-        // Keep this as a popup so future physically distinct runoff models can
-        // be added without changing the settings layout. The old screen-space
-        // wipes are intentionally no longer exposed.
-        wipe.addItem(withTitle: L10n.text("横方向（左→右）", "Horizontal (left to right)")); wipe.item(at: 0)?.tag = WipeAnimation.drain.rawValue
-        wipe.addItem(withTitle: L10n.text("縦方向（上→下）", "Vertical (top to bottom)")); wipe.item(at: 1)?.tag = WipeAnimation.vertical.rawValue
-        wipe.target = self; wipe.action = #selector(wipeAnimationChanged(_:)); wipeAnimationPopup = wipe
         let fps = NSPopUpButton(); fps.addItems(withTitles: ["24 FPS", "30 FPS", "60 FPS"])
         fps.item(at: 0)?.tag = 24; fps.item(at: 1)?.tag = 30; fps.item(at: 2)?.tag = 60
         fps.target = self; fps.action = #selector(frameRateChanged(_:)); frameRatePopup = fps
@@ -576,7 +579,68 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         aberration.target = self; aberration.action = #selector(chromaticAberrationChanged(_:))
         aberration.toolTip = L10n.text("水滴の輪郭に出る色のずれの強さ。背景の屈折と画面収録の許可が必要です。", "Color separation at water edges. Requires background refraction and Screen Recording permission.")
         chromaticAberrationPopup = aberration
-        addCard(L10n.text("雨の見た目", "Rain appearance"), contents: [row(L10n.text("雨の強さ", "Rain intensity"), control: strength, detail: L10n.text("レイニーモード用。ウェザーモードでは天気から自動調整します。", "For Rainy Mode. Weather Mode adjusts intensity automatically.")), intervalRow, row(L10n.text("雨粒のサイズ", "Raindrop size"), control: size), row(L10n.text("吹き上げ", "Runoff animation"), control: wipe), row(L10n.text("描画FPS", "Frame rate"), control: fps), row(L10n.text("描画品質", "Render quality"), control: quality, detail: L10n.text("衝突計算と雨筋履歴の精度", "Collision and trail-history fidelity")), refract, row(L10n.text("色収差", "Chromatic aberration"),control:aberration)])
+        addCard(L10n.text("雨の見た目", "Rain appearance"), contents: [row(L10n.text("雨の強さ", "Rain intensity"), control: strength, detail: L10n.text("レイニーモード用。ウェザーモードでは天気から自動調整します。", "For Rainy Mode. Weather Mode adjusts intensity automatically.")), intervalRow, row(L10n.text("雨粒のサイズ", "Raindrop size"), control: size), row(L10n.text("描画FPS", "Frame rate"), control: fps), row(L10n.text("描画品質", "Render quality"), control: quality, detail: L10n.text("衝突計算と雨筋履歴の精度", "Collision and trail-history fidelity")), refract, row(L10n.text("色収差", "Chromatic aberration"),control:aberration)])
+    }
+
+    private func buildWipe() {
+        let wipe = NSPopUpButton()
+        // Keep this as a popup so future physically distinct runoff models can
+        // be added without changing the settings layout. The old screen-space
+        // wipes are intentionally no longer exposed.
+        wipe.addItem(withTitle: L10n.text("横方向（左→右）", "Horizontal (left to right)")); wipe.item(at: 0)?.tag = WipeAnimation.drain.rawValue
+        wipe.addItem(withTitle: L10n.text("縦方向（上→下）", "Vertical (top to bottom)")); wipe.item(at: 1)?.tag = WipeAnimation.vertical.rawValue
+        wipe.target = self; wipe.action = #selector(wipeAnimationChanged(_:)); wipeAnimationPopup = wipe
+        let speed = NSPopUpButton()
+        let labels = [L10n.text("とても遅い（0.25倍）", "Very slow (0.25×)"),
+                      L10n.text("遅い（0.5倍）", "Slow (0.5×)"),
+                      L10n.text("標準（1倍）", "Standard (1×)"),
+                      L10n.text("速い（2倍）", "Fast (2×)"),
+                      L10n.text("とても速い（4倍）", "Very fast (4×)")]
+        for (value,label) in zip(WipeSpeed.allCases,labels) {
+            speed.addItem(withTitle:label)
+            speed.lastItem?.tag = value.rawValue
+        }
+        speed.target = self; speed.action = #selector(wipeSpeedChanged(_:)); wipeSpeedPopup = speed
+        addCard(L10n.text("吹き上げの動き", "Wipe motion"),
+                L10n.text("一度吹き上げる操作と吹き上げショートカットに適用します。標準はこれまでと同じ速度です。", "Applies to the wipe action and wipe shortcut. Standard preserves the original speed."),
+                contents:[row(L10n.text("吹き上げタイプ", "Wipe type"),control:wipe),
+                          row(L10n.text("吹き上げ速度", "Wipe speed"),control:speed)])
+    }
+
+    private func buildCursor() {
+        let effect = NSPopUpButton()
+        effect.addItem(withTitle: L10n.text("なし", "None")); effect.lastItem?.tag = CursorEffect.none.rawValue
+        effect.addItem(withTitle: L10n.text("吹き上げ", "Wipe")); effect.lastItem?.tag = CursorEffect.wipe.rawValue
+        effect.addItem(withTitle: L10n.text("ブロワー", "Blower")); effect.lastItem?.tag = CursorEffect.blower.rawValue
+        effect.target = self; effect.action = #selector(cursorEffectChanged(_:)); cursorEffectPopup = effect
+        let blower = NSPopUpButton()
+        let labels = [L10n.text("とても弱い", "Very soft"),
+                      L10n.text("弱い", "Soft"),
+                      L10n.text("標準", "Standard"),
+                      L10n.text("強い", "Strong"),
+                      L10n.text("とても強い", "Very strong")]
+        for (value,label) in zip(BlowerStrength.allCases,labels) {
+            blower.addItem(withTitle: label)
+            blower.lastItem?.tag = value.rawValue
+        }
+        blower.target = self; blower.action = #selector(blowerStrengthChanged(_:)); blowerStrengthPopup = blower
+        let strengthRow = row(L10n.text("ブロワーの強さ", "Blower strength"), control: blower,
+                              detail: L10n.text("飛ぶ強さ・飛距離・作用範囲", "Impulse, travel distance, and affected area"))
+        blowerStrengthRow = strengthRow
+        let size = NSPopUpButton()
+        let sizeLabels = [L10n.text("最小", "Smallest"), L10n.text("小", "Small"), L10n.text("標準", "Standard"), L10n.text("大", "Large"), L10n.text("最大", "Largest")]
+        for (value,label) in zip(BlowerSize.allCases,sizeLabels) {
+            size.addItem(withTitle: label)
+            size.lastItem?.tag = value.rawValue
+        }
+        size.target = self; size.action = #selector(blowerSizeChanged(_:)); blowerSizePopup = size
+        let sizeRow = row(L10n.text("吹き上げサイズ", "Wipe size"), control: size,
+                          detail: L10n.text("カーソルで吹き上げる範囲", "Area cleared by the wipe effect"))
+        blowerSizeRow = sizeRow
+        addCard(L10n.text("カーソル効果", "Cursor effect"),
+                L10n.text("カーソルを中心に水滴へ作用する効果を選択します。", "Choose how the cursor affects nearby water."),
+                contents: [row(L10n.text("効果", "Effect"), control: effect),
+                          strengthRow, sizeRow])
     }
 
     private func buildLocation() {
@@ -673,6 +737,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         randomIntervalRow?.isHidden = !snapshot.randomStrength || snapshot.mode == "auto"
         dropScalePopup?.selectItems(with: { ($0.representedObject as? NSNumber)?.floatValue ?? -1 }, matching: snapshot.dropScale)
         wipeAnimationPopup?.selectItem(withTag: snapshot.wipeAnimation.rawValue)
+        wipeSpeedPopup?.selectItem(withTag: snapshot.wipeSpeed.rawValue)
+        cursorEffectPopup?.selectItem(withTag: snapshot.cursorEffect.rawValue)
+        blowerStrengthPopup?.selectItem(withTag: snapshot.blowerStrength.rawValue)
+        blowerStrengthRow?.isHidden = snapshot.cursorEffect != .blower
+        blowerSizePopup?.selectItem(withTag: snapshot.blowerSize.rawValue)
+        blowerSizeRow?.isHidden = snapshot.cursorEffect != .wipe
         frameRatePopup?.selectItem(withTag: snapshot.frameRate)
         renderQualityPopup?.selectItem(withTag: snapshot.renderQuality.rawValue)
         refractionButton?.state = snapshot.refraction ? .on : .off
@@ -757,6 +827,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func randomIntervalChanged(_ sender: NSPopUpButton) { app?.settingsSetRandomInterval(sender.indexOfSelectedItem) }
     @objc private func dropScaleChanged(_ sender: NSPopUpButton) {
         if let value = (sender.selectedItem?.representedObject as? NSNumber)?.floatValue { app?.settingsSetDropScale(value) }
+    }
+    @objc private func wipeSpeedChanged(_ sender: NSPopUpButton) {
+        guard let value = WipeSpeed(rawValue:sender.selectedTag()) else { return }
+        app?.settingsSetWipeSpeed(value)
+    }
+    @objc private func cursorEffectChanged(_ sender: NSPopUpButton) {
+        guard let value = CursorEffect(rawValue: sender.selectedTag()) else { return }
+        app?.settingsSetCursorEffect(value)
+    }
+    @objc private func blowerStrengthChanged(_ sender: NSPopUpButton) {
+        guard let value = BlowerStrength(rawValue: sender.selectedTag()) else { return }
+        app?.settingsSetBlowerStrength(value)
+    }
+    @objc private func blowerSizeChanged(_ sender: NSPopUpButton) {
+        guard let value = BlowerSize(rawValue: sender.selectedTag()) else { return }
+        app?.settingsSetBlowerSize(value)
     }
     @objc private func wipeAnimationChanged(_ sender: NSPopUpButton) {
         app?.settingsSetWipeAnimation(WipeAnimation(rawValue: sender.selectedItem?.tag ?? 0) ?? .drain)

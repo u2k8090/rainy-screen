@@ -2,10 +2,10 @@
 using namespace metal;
 struct Uniforms {
     float2 size; float2 mouse; float2 previousMouse;
-    float dt; float intensity; float time; float wipeRadius; float hasCapture; float wipe; float dropScale; float mist;
+    float dt; float intensity; float time; float wipeRadius; float hasCapture; float wipe; float blowerClearStrength; float dropScale; float mist;
     float exclusionCount; float sweepStart; float sweepEnd; float sweepAxis; float chromaticAberration;
 };
-struct Drop { float2 position; float2 radius; float strength; float phase; float tilt; float kind; };
+struct Drop { float2 position; float2 radius; float strength; float phase; float tilt; float kind; float2 endWidthRatio; };
 struct Vertex { float4 position [[position]]; float2 uv; float strength; float phase; float kind; float2 radius; float2 widths; };
 float hash21(float2 p) { return fract(sin(dot(p,float2(127.1,311.7)))*43758.5453); }
 float noise(float2 p) {
@@ -46,7 +46,7 @@ vertex Vertex dropVertex(uint id [[vertex_id]],uint instance [[instance_id]],
     }
     float2 local = corners[id]*1.12*d.radius;
     float2 p = d.position + float2(local.x*cos(d.tilt)-local.y*sin(d.tilt),local.x*sin(d.tilt)+local.y*cos(d.tilt));
-    return {float4(p/u.size*float2(2,-2)+float2(-1,1),0,1),corners[id]*1.12,d.strength,d.phase,d.kind,d.radius,float2(0)};
+    return {float4(p/u.size*float2(2,-2)+float2(-1,1),0,1),corners[id]*1.12,d.strength,d.phase,d.kind,d.radius,float2(d.phase,d.endWidthRatio.x)};
 }
 fragment float4 dropFragment(Vertex in [[stage_in]]) {
     float2 p = in.uv;
@@ -69,6 +69,19 @@ fragment float4 dropFragment(Vertex in [[stage_in]]) {
         // Integral of this cap is pi/4; depth and width reproduce the
         // cross-sectional area owned by the model, with no noise bands.
         return float4(cap*width*(0.12/0.785398),0,0,0);
+    }
+    if(in.kind > 1.3) {
+        // Taper between shared endpoint widths instead of stepping the width
+        // at each capsule. Endpoint caps keep neighboring samples connected.
+        float2 q = p*in.radius;
+        float halfLength = max(0.001,in.radius.y-in.radius.x);
+        float along = clamp(q.y,-halfLength,halfLength);
+        float t = (along+halfLength)/(2*halfLength);
+        float width = in.radius.x*mix(in.widths.x,in.widths.y,t);
+        float r = length(float2(q.x,q.y-along))/max(0.001,width);
+        float cap = sqrt(max(0.0,1-r*r));
+        float depth = width*in.strength;
+        return float4(cap*depth,cap*min(1.0,depth*0.55),0,0);
     }
     if(in.kind > 0.5) {
         // Rounded continuous capsules. Max blending prevents overlapping trail samples from piling up.
@@ -122,6 +135,11 @@ wet *= exp(-u.dt*flow*10);
         float t = clamp(dot(p-u.previousMouse,d)/max(dot(d,d),0.001),0.0,1.0);
         float distance = length(p-u.previousMouse-t*d);
         wet *= smoothstep(u.wipeRadius*0.76,u.wipeRadius,distance);
+    }
+    if(u.blowerClearStrength > 0.0) {
+        float distance = length(p-u.mouse);
+        float coverage = 1.0-smoothstep(u.wipeRadius*0.72,u.wipeRadius,distance);
+        wet *= exp(-u.dt*u.blowerClearStrength*4.0*coverage);
     }
     next.write(float4(wet,0,0,1),gid);
 }
